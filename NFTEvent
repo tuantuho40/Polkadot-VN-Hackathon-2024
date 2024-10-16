@@ -1,0 +1,104 @@
+use frame_support::{
+    decl_module, decl_storage, decl_event, decl_error, dispatch,
+    traits::{ Randomness, Currency, tokens::ExistenceRequirement },
+    StorageValue, StorageMap
+};
+use frame_system::ensure_signed;
+use sp_std::vec::Vec;
+use unique_primitives::types::{TokenId, CollectionId};
+use unique_traits::nonfungibles::Create;
+
+#[cfg(feature = "std")]
+use serde::{Deserialize, Serialize};
+
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
+pub struct Event<AccountId> {
+    creator: AccountId,
+    name: Vec<u8>,
+    description: Vec<u8>,
+    max_participants: u32,
+    collection_id: CollectionId,
+}
+
+pub trait Config: frame_system::Config {
+    type Event: From<Event<Self>> + Into<<Self as frame_system::Config>::Event>;
+    type Currency: Currency<Self::AccountId>;
+    type Randomness: Randomness<Self::Hash>;
+    type UniqueNetwork: Create<Self::AccountId>;
+}
+
+decl_storage! {
+    trait Store for Module<T: Config> as EventNFT {
+        Events get(fn events): map hasher(blake2_128_concat) u32 => Event<T::AccountId>;
+        EventCount get(fn event_count): u32;
+        EventParticipants get(fn event_participants): double_map hasher(blake2_128_concat) u32, hasher(blake2_128_concat) T::AccountId => bool;
+    }
+}
+
+decl_event!(
+    pub enum Event<T> where AccountId = <T as frame_system::Config>::AccountId {
+        EventCreated(u32, AccountId),
+        ParticipantAdded(u32, AccountId),
+    }
+);
+
+decl_error! {
+    pub enum Error for Module<T: Config> {
+        EventNotFound,
+        EventFull,
+        AlreadyParticipating,
+    }
+}
+
+decl_module! {
+    pub struct Module<T: Config> for enum Call where origin: T::Origin {
+        type Error = Error<T>;
+
+        fn deposit_event() = default;
+
+        #[weight = 10_000]
+        pub fn create_event(origin, name: Vec<u8>, description: Vec<u8>, max_participants: u32) -> dispatch::DispatchResult {
+            let creator = ensure_signed(origin)?;
+
+            let event_id = Self::event_count();
+            let collection_id = T::UniqueNetwork::create_collection(&creator, name.clone())?;
+
+            let event = Event {
+                creator: creator.clone(),
+                name,
+                description,
+                max_participants,
+                collection_id,
+            };
+
+            Events::<T>::insert(event_id, event);
+            EventCount::put(event_id + 1);
+
+            Self::deposit_event(RawEvent::EventCreated(event_id, creator));
+
+            Ok(())
+        }
+
+        #[weight = 10_000]
+        pub fn join_event(origin, event_id: u32) -> dispatch::DispatchResult {
+            let participant = ensure_signed(origin)?;
+
+            let event = Events::<T>::get(event_id).ok_or(Error::<T>::EventNotFound)?;
+
+            ensure!(!EventParticipants::<T>::contains_key(event_id, &participant), Error::<T>::AlreadyParticipating);
+
+            let participant_count = EventParticipants::<T>::iter_prefix(event_id).count() as u32;
+            ensure!(participant_count < event.max_participants, Error::<T>::EventFull);
+
+            // Mint NFT for participant
+            let token_id = T::UniqueNetwork::mint(&participant, event.collection_id)?;
+
+            EventParticipants::<T>::insert(event_id, &participant, true);
+
+            Self::deposit_event(RawEvent::ParticipantAdded(event_id, participant));
+
+            Ok(())
+        }
+    }
+}
