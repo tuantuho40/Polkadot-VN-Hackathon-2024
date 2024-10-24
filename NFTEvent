@@ -1,104 +1,503 @@
-use frame_support::{
-    decl_module, decl_storage, decl_event, decl_error, dispatch,
-    traits::{ Randomness, Currency, tokens::ExistenceRequirement },
-    StorageValue, StorageMap
-};
-use frame_system::ensure_signed;
-use sp_std::vec::Vec;
-use unique_primitives::types::{TokenId, CollectionId};
-use unique_traits::nonfungibles::Create;
+// Project Structure
+├── README.md
+├── contract/
+│   ├── Cargo.toml
+│   ├── lib.rs
+│   └── tests/
+├── frontend/
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── next.config.js
+│   ├── tailwind.config.js
+│   └── src/
+└── .gitignore
 
-#[cfg(feature = "std")]
-use serde::{Deserialize, Serialize};
+// README.md
+# NFT Event Platform
 
-#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug)]
-#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
-pub struct Event<AccountId> {
-    creator: AccountId,
-    name: Vec<u8>,
-    description: Vec<u8>,
-    max_participants: u32,
-    collection_id: CollectionId,
-}
+A decentralized event management platform built on Polkadot where event tickets are NFTs.
 
-pub trait Config: frame_system::Config {
-    type Event: From<Event<Self>> + Into<<Self as frame_system::Config>::Event>;
-    type Currency: Currency<Self::AccountId>;
-    type Randomness: Randomness<Self::Hash>;
-    type UniqueNetwork: Create<Self::AccountId>;
-}
+## Features
+- Create and manage events
+- Purchase tickets as NFTs
+- View owned tickets
+- Transfer tickets
+- QR code generation for ticket validation
 
-decl_storage! {
-    trait Store for Module<T: Config> as EventNFT {
-        Events get(fn events): map hasher(blake2_128_concat) u32 => Event<T::AccountId>;
-        EventCount get(fn event_count): u32;
-        EventParticipants get(fn event_participants): double_map hasher(blake2_128_concat) u32, hasher(blake2_128_concat) T::AccountId => bool;
+## Setup Instructions
+
+### Smart Contract
+1. Install prerequisites:
+```bash
+cargo install cargo-contract
+```
+
+2. Build contract:
+```bash
+cd contract
+cargo contract build
+```
+
+3. Deploy contract (using polkadot.js)
+
+### Frontend
+1. Install dependencies:
+```bash
+cd frontend
+npm install
+```
+
+2. Configure environment:
+```bash
+cp .env.example .env.local
+```
+
+3. Run development server:
+```bash
+npm run dev
+```
+
+## Testing
+```bash
+# Contract tests
+cd contract
+cargo test
+
+# Frontend tests
+cd frontend
+npm test
+```
+
+// contract/Cargo.toml
+[package]
+name = "nft-event"
+version = "0.1.0"
+authors = ["Your Name"]
+edition = "2021"
+
+[dependencies]
+ink_lang = { version = "3.0.0", default-features = false }
+ink_primitives = { version = "3.0.0", default-features = false }
+ink_metadata = { version = "3.0.0", default-features = false, features = ["derive"], optional = true }
+ink_env = { version = "3.0.0", default-features = false }
+ink_storage = { version = "3.0.0", default-features = false }
+ink_prelude = { version = "3.0.0", default-features = false }
+scale = { package = "parity-scale-codec", version = "3.0.0", default-features = false, features = ["derive"] }
+scale-info = { version = "2.0.0", default-features = false, features = ["derive"], optional = true }
+
+[lib]
+name = "nft_event"
+path = "lib.rs"
+crate-type = [
+    "cdylib",
+    "rlib"
+]
+
+[features]
+default = ["std"]
+std = [
+    "ink_metadata/std",
+    "ink_env/std",
+    "ink_storage/std",
+    "ink_primitives/std",
+    "scale/std",
+    "scale-info/std",
+]
+ink-as-dependency = []
+
+// contract/lib.rs
+#![cfg_attr(not(feature = "std"), no_std)]
+
+use ink_lang as ink;
+
+#[ink::contract]
+mod nft_event {
+    use ink_storage::{
+        traits::SpreadAllocate,
+        Mapping,
+    };
+    use ink_prelude::string::String;
+    use ink_prelude::vec::Vec;
+
+    #[derive(Debug, scale::Encode, scale::Decode, Clone)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct Event {
+        name: String,
+        description: String,
+        date: u64,
+        location: String,
+        max_tickets: u32,
+        tickets_sold: u32,
+        price: Balance,
+        image_url: String,
+        organizer: AccountId,
+        is_canceled: bool,
     }
-}
 
-decl_event!(
-    pub enum Event<T> where AccountId = <T as frame_system::Config>::AccountId {
-        EventCreated(u32, AccountId),
-        ParticipantAdded(u32, AccountId),
+    #[derive(Debug, scale::Encode, scale::Decode, Clone)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct Ticket {
+        event_id: u32,
+        owner: AccountId,
+        token_id: u32,
+        purchase_date: u64,
+        is_used: bool,
     }
-);
 
-decl_error! {
-    pub enum Error for Module<T: Config> {
-        EventNotFound,
-        EventFull,
-        AlreadyParticipating,
+    #[ink(storage)]
+    #[derive(SpreadAllocate)]
+    pub struct NFTEvent {
+        events: Mapping<u32, Event>,
+        tickets: Mapping<u32, Ticket>,
+        event_count: u32,
+        ticket_count: u32,
+        owner: AccountId,
+        event_organizers: Mapping<AccountId, bool>,
     }
-}
 
-decl_module! {
-    pub struct Module<T: Config> for enum Call where origin: T::Origin {
-        type Error = Error<T>;
+    #[ink(event)]
+    pub struct EventCreated {
+        #[ink(topic)]
+        event_id: u32,
+        #[ink(topic)]
+        organizer: AccountId,
+        name: String,
+    }
 
-        fn deposit_event() = default;
+    #[ink(event)]
+    pub struct TicketPurchased {
+        #[ink(topic)]
+        ticket_id: u32,
+        #[ink(topic)]
+        event_id: u32,
+        #[ink(topic)]
+        owner: AccountId,
+    }
 
-        #[weight = 10_000]
-        pub fn create_event(origin, name: Vec<u8>, description: Vec<u8>, max_participants: u32) -> dispatch::DispatchResult {
-            let creator = ensure_signed(origin)?;
+    impl NFTEvent {
+        #[ink(constructor)]
+        pub fn new() -> Self {
+            ink_lang::utils::initialize_contract(|contract: &mut Self| {
+                contract.owner = Self::env().caller();
+                contract.event_count = 0;
+                contract.ticket_count = 0;
+                contract.event_organizers.insert(Self::env().caller(), &true);
+            })
+        }
 
-            let event_id = Self::event_count();
-            let collection_id = T::UniqueNetwork::create_collection(&creator, name.clone())?;
+        #[ink(message)]
+        pub fn add_organizer(&mut self, organizer: AccountId) -> bool {
+            let caller = self.env().caller();
+            if caller != self.owner {
+                return false;
+            }
+            self.event_organizers.insert(organizer, &true);
+            true
+        }
+
+        #[ink(message)]
+        pub fn create_event(
+            &mut self,
+            name: String,
+            description: String,
+            date: u64,
+            location: String,
+            max_tickets: u32,
+            price: Balance,
+            image_url: String,
+        ) -> bool {
+            let caller = self.env().caller();
+            if !self.event_organizers.get(caller).unwrap_or(false) {
+                return false;
+            }
 
             let event = Event {
-                creator: creator.clone(),
-                name,
+                name: name.clone(),
                 description,
-                max_participants,
-                collection_id,
+                date,
+                location,
+                max_tickets,
+                tickets_sold: 0,
+                price,
+                image_url,
+                organizer: caller,
+                is_canceled: false,
             };
 
-            Events::<T>::insert(event_id, event);
-            EventCount::put(event_id + 1);
+            self.events.insert(self.event_count, &event);
+            
+            self.env().emit_event(EventCreated {
+                event_id: self.event_count,
+                organizer: caller,
+                name,
+            });
 
-            Self::deposit_event(RawEvent::EventCreated(event_id, creator));
-
-            Ok(())
+            self.event_count += 1;
+            true
         }
 
-        #[weight = 10_000]
-        pub fn join_event(origin, event_id: u32) -> dispatch::DispatchResult {
-            let participant = ensure_signed(origin)?;
+        #[ink(message)]
+        pub fn cancel_event(&mut self, event_id: u32) -> bool {
+            if let Some(mut event) = self.events.get(event_id) {
+                let caller = self.env().caller();
+                if caller != event.organizer && caller != self.owner {
+                    return false;
+                }
 
-            let event = Events::<T>::get(event_id).ok_or(Error::<T>::EventNotFound)?;
+                event.is_canceled = true;
+                self.events.insert(event_id, &event);
+                true
+            } else {
+                false
+            }
+        }
 
-            ensure!(!EventParticipants::<T>::contains_key(event_id, &participant), Error::<T>::AlreadyParticipating);
+        #[ink(message)]
+        pub fn buy_ticket(&mut self, event_id: u32) -> bool {
+            let caller = self.env().caller();
+            
+            if let Some(mut event) = self.events.get(event_id) {
+                if event.is_canceled || event.tickets_sold >= event.max_tickets {
+                    return false;
+                }
 
-            let participant_count = EventParticipants::<T>::iter_prefix(event_id).count() as u32;
-            ensure!(participant_count < event.max_participants, Error::<T>::EventFull);
+                let transferred = self.env().transferred_value();
+                if transferred != event.price {
+                    return false;
+                }
 
-            // Mint NFT for participant
-            let token_id = T::UniqueNetwork::mint(&participant, event.collection_id)?;
+                let ticket = Ticket {
+                    event_id,
+                    owner: caller,
+                    token_id: self.ticket_count,
+                    purchase_date: self.env().block_timestamp(),
+                    is_used: false,
+                };
 
-            EventParticipants::<T>::insert(event_id, &participant, true);
+                self.tickets.insert(self.ticket_count, &ticket);
+                event.tickets_sold += 1;
+                self.events.insert(event_id, &event);
 
-            Self::deposit_event(RawEvent::ParticipantAdded(event_id, participant));
+                self.env().emit_event(TicketPurchased {
+                    ticket_id: self.ticket_count,
+                    event_id,
+                    owner: caller,
+                });
 
-            Ok(())
+                self.ticket_count += 1;
+                true
+            } else {
+                false
+            }
+        }
+
+        #[ink(message)]
+        pub fn transfer_ticket(&mut self, ticket_id: u32, to: AccountId) -> bool {
+            if let Some(mut ticket) = self.tickets.get(ticket_id) {
+                let caller = self.env().caller();
+                if caller != ticket.owner {
+                    return false;
+                }
+
+                ticket.owner = to;
+                self.tickets.insert(ticket_id, &ticket);
+                true
+            } else {
+                false
+            }
+        }
+
+        #[ink(message)]
+        pub fn use_ticket(&mut self, ticket_id: u32) -> bool {
+            if let Some(mut ticket) = self.tickets.get(ticket_id) {
+                if ticket.is_used {
+                    return false;
+                }
+
+                let event = self.events.get(ticket.event_id).unwrap();
+                if self.env().block_timestamp() < event.date {
+                    return false;
+                }
+
+                ticket.is_used = true;
+                self.tickets.insert(ticket_id, &ticket);
+                true
+            } else {
+                false
+            }
+        }
+
+        #[ink(message)]
+        pub fn get_event(&self, event_id: u32) -> Option<Event> {
+            self.events.get(event_id)
+        }
+
+        #[ink(message)]
+        pub fn get_ticket(&self, ticket_id: u32) -> Option<Ticket> {
+            self.tickets.get(ticket_id)
+        }
+
+        #[ink(message)]
+        pub fn get_tickets_by_owner(&self, owner: AccountId) -> Vec<Ticket> {
+            let mut result = Vec::new();
+            for i in 0..self.ticket_count {
+                if let Some(ticket) = self.tickets.get(i) {
+                    if ticket.owner == owner {
+                        result.push(ticket);
+                    }
+                }
+            }
+            result
+        }
+
+        #[ink(message)]
+        pub fn get_events_by_organizer(&self, organizer: AccountId) -> Vec<(u32, Event)> {
+            let mut result = Vec::new();
+            for i in 0..self.event_count {
+                if let Some(event) = self.events.get(i) {
+                    if event.organizer == organizer {
+                        result.push((i, event));
+                    }
+                }
+            }
+            result
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[ink::test]
+        fn create_event_works() {
+            let mut contract = NFTEvent::new();
+            let name = String::from("Test Event");
+            let description = String::from("Test Description");
+            let date = 1679529600;
+            let location = String::from("Test Location");
+            let max_tickets = 100;
+            let price = 1000000000000;
+            let image_url = String::from("https://example.com/image.jpg");
+
+            assert!(contract.create_event(
+                name,
+                description,
+                date,
+                location,
+                max_tickets,
+                price,
+                image_url
+            ));
+
+            let event = contract.get_event(0).unwrap();
+            assert_eq!(event.tickets_sold, 0);
+            assert_eq!(event.max_tickets, 100);
+        }
+
+        #[ink::test]
+        fn buy_ticket_works() {
+            let mut contract = NFTEvent::new();
+            let name = String::from("Test Event");
+            let description = String::from("Test Description");
+            let date = 1679529600;
+            let location = String::from("Test Location");
+            let max_tickets = 100;
+            let price = 1000000000000;
+            let image_url = String::from("https://example.com/image.jpg");
+
+            contract.create_event(
+                name,
+                description,
+                date,
+                location,
+                max_tickets,
+                price,
+                image_url
+            );
+
+            assert!(contract.buy_ticket(0));
+            let ticket = contract.get_ticket(0).unwrap();
+            assert_eq!(ticket.event_id, 0);
+            assert!(!ticket.is_used);
         }
     }
 }
+
+// frontend/package.json
+{
+  "name": "nft-event-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@polkadot/api": "^10.9.1",
+    "@polkadot/api-contract": "^10.9.1",
+    "@polkadot/extension-dapp": "^0.46.5",
+    "@polkadot/util": "^12.3.2",
+    "@polkadot/util-crypto": "^12.3.2",
+    "next": "13.4.19",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "react-qr-code": "^2.0.12",
+    "typescript": "5.2.2"
+  },
+  "devDependencies": {
+    "@types/node": "20.5.9",
+    "@types/react": "18.2.21",
+    "@types/react-dom": "18.2.7",
+    "autoprefixer": "10.4.15",
+    "postcss": "8.4.29",
+    "tailwindcss": "3.3.3"
+  }
+}
+
+// frontend/src/pages/_app.tsx
+import '@/styles/globals.css'
+import type { AppProps } from 'next/app'
+import { Web3Provider } from '@/contexts/Web3Context'
+
+export default function App({ Component, pageProps }: AppProps) {
+  return (
+    <Web3Provider>
+      <Component {...pageProps} />
+    </Web3Provider>
+  )
+}
+
+// frontend/src/contexts/Web3Context.tsx
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { ApiPromise, WsProvider } from '@polkadot/api';
+import { web3Accounts, web3Enable } from '@polkadot/extension-dapp';
+
+interface Web3ContextType {
+  api: ApiPromise | null;
+  accounts: any[];
+  selectedAccount: any;
+  setSelectedAccount: (account: any) => void;
+  connecting: boolean;
+  error: string | null;
+}
+
+const Web3Context = createContext<Web3ContextType>({
+  api: null,
+  accounts: [],
+  selectedAccount: null,
+  setSelectedAccount: () => {},
+  connecting: true,
+  error: null,
+});
+
+export const Web3Provider = ({ children }: { children: React.ReactNode }) => {
+  const [api, setApi] = useState<ApiPromise | null>(null);
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [selectedAccount, setSelectedAccount] = useState<any>(null);
+  const [connecting, setConnecting] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const init = async () =>
