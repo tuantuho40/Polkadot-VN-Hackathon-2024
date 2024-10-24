@@ -1,0 +1,369 @@
+// frontend/src/contexts/Web3Context.tsx (continued)
+    const init = async () => {
+      try {
+        // Initialize connection to Polkadot node
+        const wsProvider = new WsProvider('wss://rpc.polkadot.io');
+        const api = await ApiPromise.create({ provider: wsProvider });
+        setApi(api);
+
+        // Enable web3 extension
+        const extensions = await web3Enable('NFT Event Platform');
+        if (extensions.length === 0) {
+          throw new Error('No web3 extension found');
+        }
+
+        // Get accounts
+        const accounts = await web3Accounts();
+        setAccounts(accounts);
+        if (accounts.length > 0) {
+          setSelectedAccount(accounts[0]);
+        }
+      } catch (e) {
+        setError(e.message);
+      } finally {
+        setConnecting(false);
+      }
+    };
+
+    init();
+
+    return () => {
+      if (api) {
+        api.disconnect();
+      }
+    };
+  }, []);
+
+  return (
+    <Web3Context.Provider
+      value={{
+        api,
+        accounts,
+        selectedAccount,
+        setSelectedAccount,
+        connecting,
+        error,
+      }}
+    >
+      {children}
+    </Web3Context.Provider>
+  );
+};
+
+export const useWeb3 = () => useContext(Web3Context);
+
+// frontend/src/components/Layout.tsx
+import React from 'react';
+import Navbar from './Navbar';
+
+interface LayoutProps {
+  children: React.ReactNode;
+}
+
+const Layout: React.FC<LayoutProps> = ({ children }) => {
+  return (
+    <div className="min-h-screen bg-gray-100">
+      <Navbar />
+      <main className="container mx-auto px-4 py-8">
+        {children}
+      </main>
+    </div>
+  );
+};
+
+export default Layout;
+
+// frontend/src/components/Navbar.tsx
+import React from 'react';
+import Link from 'next/link';
+import { useWeb3 } from '@/contexts/Web3Context';
+
+const Navbar: React.FC = () => {
+  const { selectedAccount } = useWeb3();
+
+  return (
+    <nav className="bg-white shadow-lg">
+      <div className="container mx-auto px-4">
+        <div className="flex justify-between items-center py-4">
+          <Link href="/" className="text-xl font-bold">
+            NFT Event Platform
+          </Link>
+          <div className="flex items-center space-x-4">
+            <Link href="/events" className="hover:text-gray-600">
+              Events
+            </Link>
+            <Link href="/my-tickets" className="hover:text-gray-600">
+              My Tickets
+            </Link>
+            {selectedAccount && (
+              <span className="text-sm text-gray-600">
+                {selectedAccount.meta.name}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </nav>
+  );
+};
+
+export default Navbar;
+
+// frontend/src/components/EventCard.tsx
+import React from 'react';
+import Link from 'next/link';
+
+interface EventProps {
+  id: number;
+  name: string;
+  description: string;
+  date: number;
+  location: string;
+  price: string;
+  imageUrl: string;
+  ticketsLeft: number;
+}
+
+const EventCard: React.FC<EventProps> = ({
+  id,
+  name,
+  description,
+  date,
+  location,
+  price,
+  imageUrl,
+  ticketsLeft,
+}) => {
+  return (
+    <div className="bg-white rounded-lg shadow-md overflow-hidden">
+      <img
+        src={imageUrl}
+        alt={name}
+        className="w-full h-48 object-cover"
+      />
+      <div className="p-4">
+        <h3 className="text-xl font-semibold mb-2">{name}</h3>
+        <p className="text-gray-600 mb-2">{description}</p>
+        <div className="flex justify-between items-center mb-2">
+          <span className="text-gray-500">
+            {new Date(date).toLocaleDateString()}
+          </span>
+          <span className="text-gray-500">{location}</span>
+        </div>
+        <div className="flex justify-between items-center">
+          <span className="text-lg font-bold">{price} DOT</span>
+          <span className="text-sm text-gray-500">
+            {ticketsLeft} tickets left
+          </span>
+        </div>
+        <Link
+          href={`/events/${id}`}
+          className="mt-4 block w-full text-center bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700"
+        >
+          View Details
+        </Link>
+      </div>
+    </div>
+  );
+};
+
+export default EventCard;
+
+// frontend/src/components/TicketCard.tsx
+import React from 'react';
+import QRCode from 'react-qr-code';
+
+interface TicketProps {
+  eventName: string;
+  eventDate: number;
+  tokenId: number;
+  isUsed: boolean;
+  onTransfer: () => void;
+}
+
+const TicketCard: React.FC<TicketProps> = ({
+  eventName,
+  eventDate,
+  tokenId,
+  isUsed,
+  onTransfer,
+}) => {
+  return (
+    <div className="bg-white rounded-lg shadow-md overflow-hidden">
+      <div className="p-4">
+        <div className="flex justify-between items-start mb-4">
+          <div>
+            <h3 className="text-xl font-semibold mb-2">{eventName}</h3>
+            <p className="text-gray-500">
+              {new Date(eventDate).toLocaleDateString()}
+            </p>
+          </div>
+          <div className="text-right">
+            <span className="text-sm text-gray-500">Token ID: {tokenId}</span>
+            {isUsed && (
+              <span className="block text-red-500 text-sm">Used</span>
+            )}
+          </div>
+        </div>
+        <div className="flex justify-center mb-4">
+          <QRCode
+            value={`ticket-${tokenId}`}
+            size={128}
+            level="H"
+          />
+        </div>
+        {!isUsed && (
+          <button
+            onClick={onTransfer}
+            className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700"
+          >
+            Transfer Ticket
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default TicketCard;
+
+// frontend/src/pages/index.tsx
+import { useEffect, useState } from 'react';
+import Layout from '@/components/Layout';
+import EventCard from '@/components/EventCard';
+import { useWeb3 } from '@/contexts/Web3Context';
+
+export default function Home() {
+  const { api, connecting, error } = useWeb3();
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadEvents = async () => {
+      if (api) {
+        try {
+          // Load events from contract
+          // Implementation depends on your contract structure
+          setLoading(false);
+        } catch (e) {
+          console.error(e);
+          setLoading(false);
+        }
+      }
+    };
+
+    loadEvents();
+  }, [api]);
+
+  if (connecting) return <div>Connecting to network...</div>;
+  if (error) return <div>Error: {error}</div>;
+  if (loading) return <div>Loading events...</div>;
+
+  return (
+    <Layout>
+      <h1 className="text-3xl font-bold mb-8">Upcoming Events</h1>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {events.map((event: any) => (
+          <EventCard key={event.id} {...event} />
+        ))}
+      </div>
+    </Layout>
+  );
+};
+
+// frontend/src/pages/events/[id].tsx
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/router';
+import Layout from '@/components/Layout';
+import { useWeb3 } from '@/contexts/Web3Context';
+
+export default function EventDetails() {
+  const router = useRouter();
+  const { id } = router.query;
+  const { api, selectedAccount } = useWeb3();
+  const [event, setEvent] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadEvent = async () => {
+      if (api && id) {
+        try {
+          // Load event details from contract
+          setLoading(false);
+        } catch (e) {
+          console.error(e);
+          setLoading(false);
+        }
+      }
+    };
+
+    loadEvent();
+  }, [api, id]);
+
+  const purchaseTicket = async () => {
+    if (!api || !selectedAccount) return;
+
+    try {
+      // Implement ticket purchase logic
+      // This will interact with your smart contract
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  if (loading) return <div>Loading event details...</div>;
+  if (!event) return <div>Event not found</div>;
+
+  return (
+    <Layout>
+      <div className="max-w-4xl mx-auto">
+        {/* Event details UI implementation */}
+      </div>
+    </Layout>
+  );
+};
+
+// frontend/src/pages/my-tickets.tsx
+import { useEffect, useState } from 'react';
+import Layout from '@/components/Layout';
+import TicketCard from '@/components/TicketCard';
+import { useWeb3 } from '@/contexts/Web3Context';
+
+export default function MyTickets() {
+  const { api, selectedAccount } = useWeb3();
+  const [tickets, setTickets] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadTickets = async () => {
+      if (api && selectedAccount) {
+        try {
+          // Load tickets from contract
+          setLoading(false);
+        } catch (e) {
+          console.error(e);
+          setLoading(false);
+        }
+      }
+    };
+
+    loadTickets();
+  }, [api, selectedAccount]);
+
+  if (loading) return <div>Loading tickets...</div>;
+
+  return (
+    <Layout>
+      <h1 className="text-3xl font-bold mb-8">My Tickets</h1>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {tickets.map((ticket: any) => (
+          <TicketCard
+            key={ticket.tokenId}
+            {...ticket}
+            onTransfer={() => {/* Implement transfer logic */}}
+          />
+        ))}
+      </div>
+    </Layout>
+  );
+};
